@@ -130,11 +130,16 @@ def get_database_schema():
 def generate_sql_with_validation(user_query, schema_info):
     """Generate SQL query with validation and optimization suggestions"""
     
-    api_key = os.getenv("AZURE_OPENAI_API_KEY")
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    # Try to get from Streamlit secrets first (Streamlit Cloud), then fallback to environment variables
+    try:
+        api_key = st.secrets["AZURE_OPENAI_API_KEY"]
+        endpoint = st.secrets["AZURE_OPENAI_ENDPOINT"]
+    except (KeyError, FileNotFoundError):
+        api_key = os.getenv("AZURE_OPENAI_API_KEY")
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     
     if not api_key or not endpoint:
-        st.error("❌ Azure OpenAI credentials not configured")
+        st.error("❌ Azure OpenAI credentials not configured. Please set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT in .streamlit/secrets.toml or .env file")
         return None
     
     client = AzureOpenAI(
