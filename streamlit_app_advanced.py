@@ -68,16 +68,17 @@ if 'query_history' not in st.session_state:
 if 'feedback_data' not in st.session_state:
     st.session_state.feedback_data = []
 
-@st.cache_resource
 def get_database_connection():
-    """Create and cache database connection"""
+    """Create database connection (thread-safe, no caching)"""
     current_dir = Path(__file__).parent
     db_path = current_dir / "bike_shop.db"
     
     if not db_path.exists():
         load_database(db_path)
     
-    return sqlite3.connect(str(db_path))
+    # Don't cache - create new connection per call for thread safety
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    return conn
 
 def load_database(db_path):
     """Load CSV files into SQLite database"""
@@ -179,7 +180,7 @@ USER QUERY: {user_query}"""
         max_tokens=512
     )
     
-    response_text = message.content[0].text.strip()
+    response_text = message.choices[0].message.content.strip()
     
     # Parse the response
     parsed = {
@@ -310,7 +311,7 @@ with tab1:
         generate_btn = st.button("⚡ Generate", use_container_width=True, type="primary")
     
     if generate_btn and user_input.strip():
-        with st.spinner("🤖 Generating optimized SQL..."):
+        with st.spinner("🤖 Generating optimized SQL with GPT-4o-mini..."):
             try:
                 if 'schema' not in st.session_state:
                     schema = get_database_schema()
@@ -490,6 +491,6 @@ with tab4:
 # Footer
 st.divider()
 st.markdown("""
-**Text-to-SQL Query Engine** • Powered by Claude AI
+**Text-to-SQL Query Engine** • Powered by Azure OpenAI GPT-4o-mini
 [Docs](STREAMLIT_README.md) • [Quick Start](QUICKSTART.md) • [Deploy](DEPLOYMENT_GUIDE.md)
 """)

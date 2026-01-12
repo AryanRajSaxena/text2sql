@@ -42,9 +42,8 @@ if 'db_loaded' not in st.session_state:
 if 'query_history' not in st.session_state:
     st.session_state.query_history = []
 
-@st.cache_resource
 def get_database_connection():
-    """Create and cache database connection"""
+    """Create database connection (thread-safe, no caching)"""
     current_dir = Path(__file__).parent
     db_path = current_dir / "bike_shop.db"
     
@@ -52,7 +51,9 @@ def get_database_connection():
     if not db_path.exists():
         load_database(db_path)
     
-    return sqlite3.connect(str(db_path))
+    # Don't cache - create new connection per call for thread safety
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    return conn
 
 def load_database(db_path):
     """Load CSV files into SQLite database"""
@@ -149,7 +150,7 @@ RESPONSE (SQL QUERY ONLY):"""
         max_tokens=512
     )
     
-    sql_query = message.content[0].text.strip()
+    sql_query = message.choices[0].message.content.strip()
     
     # Remove markdown code blocks if present
     if sql_query.startswith('```'):
@@ -211,7 +212,7 @@ with tab1:
         if not user_input.strip():
             st.warning("⚠️ Please enter a query")
         else:
-            with st.spinner("🤖 Generating SQL query with Claude..."):
+            with st.spinner("🤖 Generating SQL query with GPT-4o-mini..."):
                 try:
                     if 'schema' not in st.session_state:
                         schema = get_database_schema()
@@ -294,7 +295,7 @@ with tab3:
     
     ### 🔧 How It Works
     1. **User Input**: Enter your query in plain English
-    2. **AI Processing**: Claude (Anthropic) converts your query to SQL
+    2. **AI Processing**: Azure OpenAI GPT-4o-mini converts your query to SQL
     3. **Execution**: The SQL is executed against the bike shop database
     4. **Results**: View and download your results
     
@@ -311,8 +312,8 @@ with tab3:
     - **stocks**: Inventory stocks
     
     ### 🤖 AI Model
-    - **Provider**: Anthropic Claude
-    - **Model**: Claude 3.5 Sonnet
+    - **Provider**: Azure OpenAI
+    - **Model**: GPT-4o-mini
     - **Purpose**: Natural language to SQL conversion
     
     ### 💡 Tips
