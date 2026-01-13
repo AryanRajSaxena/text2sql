@@ -6,6 +6,7 @@ Features:
 - Query cost estimation
 - Advanced filtering and aggregation
 - User feedback collection
+- Vector DB semantic search
 """
 
 import streamlit as st
@@ -19,6 +20,8 @@ import time
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from pinecone import Pinecone
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
@@ -67,6 +70,111 @@ if 'query_history' not in st.session_state:
     st.session_state.query_history = []
 if 'feedback_data' not in st.session_state:
     st.session_state.feedback_data = []
+if 'vector_db_initialized' not in st.session_state:
+    st.session_state.vector_db_initialized = False
+
+@st.cache_resource
+def get_embedding_model():
+    """Load sentence transformer model for embeddings"""
+    return SentenceTransformer('all-MiniLM-L6-v2')
+
+def get_pinecone_client():
+    """Initialize Pinecone client"""
+    try:
+        api_key = st.secrets["PINECONE_API_KEY"]
+        env = st.secrets.get("PINECONE_ENVIRONMENT", "us-east-1")
+    except (KeyError, FileNotFoundError):
+        api_key = os.getenv("PINECONE_API_KEY")
+        env = os.getenv("PINECONE_ENVIRONMENT", "us-east-1")
+    
+    if not api_key:
+        return None
+    
+    return Pinecone(api_key=api_key), env
+
+def initialize_vector_db(schema_info):
+    """Initialize Pinecone with schema information and example queries"""
+    pc, env = get_pinecone_client()
+    if not pc:
+        st.warning("⚠️ Pinecone API key not configured")
+        return False
+    
+    index_name = os.getenv("PINECONE_INDEX", st.secrets.get("PINECONE_INDEX", "text2sql-index"))
+    
+    try:
+        # Check if index exists
+        indexes = pc.list_indexes()
+        if index_name not in [idx.name for idx in indexes]:
+            st.info(f"ℹ️ Creating Pinecone index: {index_name}")
+            pc.create_index(
+                name=index_name,
+                dimension=384,
+                metric="cosine"
+            )
+        
+        index = pc.Index(index_name)
+        embedding_model = get_embedding_model()
+        
+        # Create documents from schema
+        documents = []
+        
+        # Add table descriptions
+        for table_name, columns in schema_info.items():
+            table_desc = f"Table: {table_name}. Columns: " + ", ".join([f"{col['name']} ({col['type']})" for col in columns])
+            documents.append({"id": f"table_{table_name}", "text": table_desc, "type": "table"})
+        
+        # Add example queries
+        example_queries = [
+            "Show me top selling products",
+            "List customers by order count",
+            "Revenue by store",
+            "Products in stock by category",
+            "Customer purchase history",
+            "Staff sales performance",
+            "Orders by date range",
+            "Brand popularity analysis"
+        ]
+        
+        for i, example in enumerate(example_queries):
+            documents.append({"id": f"example_{i}", "text": example, "type": "example"})
+        
+        # Embed and upsert documents
+        for doc in documents:
+            embedding = embedding_model.encode(doc["text"]).tolist()
+            index.upsert(vectors=[(doc["id"], embedding, {"text": doc["text"], "type": doc["type"]})])
+        
+        st.success(f"✓ Vector database initialized with {len(documents)} documents")
+        return True
+    
+    except Exception as e:
+        st.error(f"❌ Error initializing vector DB: {str(e)}")
+        return False
+
+def search_relevant_schema(user_query, top_k=5):
+    """Search for relevant schema using semantic search"""
+    pc, env = get_pinecone_client()
+    if not pc:
+        return None
+    
+    try:
+        index_name = os.getenv("PINECONE_INDEX", st.secrets.get("PINECONE_INDEX", "text2sql-index"))
+        index = pc.Index(index_name)
+        embedding_model = get_embedding_model()
+        
+        # Embed user query
+        query_embedding = embedding_model.encode(user_query).tolist()
+        
+        # Search Pinecone
+        results = index.query(
+            vector=query_embedding,
+            top_k=top_k,
+            include_metadata=True
+        )
+        
+        return results
+    except Exception as e:
+        st.warning(f"⚠️ Vector search unavailable: {str(e)}")
+        return None
 
 def get_database_connection():
     """Create database connection (thread-safe, no caching)"""
@@ -128,7 +236,7 @@ def get_database_schema():
     return schema_info
 
 def generate_sql_with_validation(user_query, schema_info):
-    """Generate SQL query with validation and optimization suggestions"""
+    """Generate SQL query with validation, optimization suggestions, and vector search"""
     
     # Try to get from Streamlit secrets first (Streamlit Cloud), then fallback to environment variables
     try:
@@ -148,11 +256,25 @@ def generate_sql_with_validation(user_query, schema_info):
         azure_endpoint=endpoint
     )
     
+    # Try to get relevant schema from vector DB
+    relevant_tables = "No specific tables found. Using full schema."
+    try:
+        search_results = search_relevant_schema(user_query, top_k=3)
+        if search_results and search_results.matches:
+            relevant_tables = "Relevant schema:\n"
+            for match in search_results.matches:
+                if match.metadata and "text" in match.metadata:
+                    relevant_tables += f"- {match.metadata['text']}\n"
+    except Exception as e:
+        pass  # Continue with full schema if vector search fails
+    
     schema_text = json.dumps(schema_info, indent=2)
     
     prompt = f"""You are an expert SQL query generator. Convert this natural language query to SQL.
 
-DATABASE SCHEMA:
+{relevant_tables}
+
+FULL DATABASE SCHEMA:
 {schema_text}
 
 RULES:
