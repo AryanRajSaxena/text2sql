@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from pinecone import Pinecone
+from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
@@ -106,10 +106,15 @@ def initialize_vector_db(schema_info):
         indexes = pc.list_indexes()
         if index_name not in [idx.name for idx in indexes]:
             st.info(f"ℹ️ Creating Pinecone index: {index_name}")
+            env = os.getenv("PINECONE_ENVIRONMENT", st.secrets.get("PINECONE_ENVIRONMENT", "us-east-1"))
             pc.create_index(
                 name=index_name,
                 dimension=384,
-                metric="cosine"
+                metric="cosine",
+                spec=ServerlessSpec(
+                    cloud="aws",
+                    region=env
+                )
             )
         
         index = pc.Index(index_name)
